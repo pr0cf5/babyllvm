@@ -7,6 +7,6 @@ public:
     bool is_branch;
     bool parse_success;
     bfProgram(uint8_t *code_, size_t code_len_);
-    llvm::BasicBlock *codegen(llvm::Module *mod, llvm::Function *func);
+    llvm::BasicBlock *codegen(llvm::Module *mod);
 };
 
