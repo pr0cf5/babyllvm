@@ -68,6 +68,59 @@ class bfProgram:
 			self.br2 = bfProgram(self.code[matchpos+1:])
 			self.isLinear = False
 
+		else:
+			i = 0
+			state = 0
+			imm = 0
+			self.shortened_code = []
+			L = len(self.code)
+
+			for x in self.code:
+				if x == '>':
+					if state == 1:
+						imm += 1
+					else:
+						self.shortened_code.append((state, imm))
+						state = 1
+						imm = 1
+				elif x == '<':
+					if state == 1:
+						imm -= 1
+					else:
+						self.shortened_code.append((state, imm))
+						state = 1
+						imm = -1
+				elif x == '+':
+					if state == 2:
+						imm += 1
+					else:
+						self.shortened_code.append((state, imm))
+						state = 2
+						imm = 1
+				elif x == '-':
+					if state == 2:
+						imm -= 1
+					else:
+						self.shortened_code.append((state, imm))
+						state = 2
+						imm = -1
+				elif x == '.':
+					if state == 3:
+						imm += 1
+					else:
+						self.shortened_code.append((state, imm))
+						state = 3
+						imm = 1
+				elif x == ',':
+					if state == 4:
+						imm += 1
+					else:
+						self.shortened_code.append((state, imm))
+						state = 4
+						imm = 1
+
+			self.shortened_code.append((state, imm))
+
 	def codegen(self, module):
 		main_routine = findFunctionByName(module, "main_routine")
 
@@ -76,47 +129,52 @@ class bfProgram:
 			builder = llvmIR.IRBuilder()
 			builder.position_at_end(block)
 
-			for x in self.code:
-				if x == '>':
-					dptr = findGlobvarByName(module, "data_ptr")
-					ori = builder.ptrtoint(builder.load(dptr), i64)
-					one = llvmIR.Constant(i64, 1)
-					inc = builder.inttoptr(builder.add(ori, one), i8_ptr)
-					builder.store(inc, dptr)
-				elif x == '<':
-					dptr = findGlobvarByName(module, "data_ptr")
-					ori = builder.ptrtoint(builder.load(dptr), i64)
-					one = llvmIR.Constant(i64, 1)
-					inc = builder.inttoptr(builder.sub(ori, one), i8_ptr)
-					builder.store(inc, dptr)
-				elif x == '+':
-					dptr_ptr = findGlobvarByName(module, "data_ptr")
-					dptr = builder.load(dptr_ptr)
-					ori = builder.load(dptr)
-					one = llvmIR.Constant(i8, 1)
-					inc = builder.store(builder.add(ori, one), dptr)
-				elif x == '-':
-					dptr_ptr = findGlobvarByName(module, "data_ptr")
-					dptr = builder.load(dptr_ptr)
-					ori = builder.load(dptr)
-					one = llvmIR.Constant(i8, 1)
-					inc = builder.store(builder.sub(ori, one), dptr)
-				elif x == '.':
-					putchar = findFunctionByName(module, "putchar")
-					dptr_ptr = findGlobvarByName(module, "data_ptr")
-					dptr = builder.load(dptr_ptr)
-					ori = builder.load(dptr)
-					builder.call(putchar, [ori])
+			dptr_ptr = findGlobvarByName(module, "data_ptr")
+			sptr_ptr = findGlobvarByName(module, "start_ptr")
+			ptrBoundCheck = findFunctionByName(module, "ptrBoundCheck")
+			print_chars = findFunctionByName(module, "print_chars")
+			read_chars = findFunctionByName(module, "read_chars")
 
-				elif x == ',':
-					getchar = findFunctionByName(module, "getchar")
-					dptr_ptr = findGlobvarByName(module, "data_ptr")
+			for op, imm in self.shortened_code:
+				if op == 0:
+					continue
+				elif op == 1:
+					ori = builder.ptrtoint(builder.load(dptr_ptr), i64)
+					incr = llvmIR.Constant(i64, imm)
+					new = builder.inttoptr(builder.add(ori, incr), i8_ptr)
+					builder.store(new, dptr_ptr)
+				elif op == 2:
 					dptr = builder.load(dptr_ptr)
-					ch = builder.call(getchar, [])
-					ori = builder.store(ch, dptr)
-
+					sptr = builder.load(sptr_ptr)
+					cur = builder.ptrtoint(dptr, i64)
+					start = builder.ptrtoint(sptr, i64)
+					bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+					builder.call(ptrBoundCheck, [start, bound, cur])
+					ori = builder.load(dptr)
+					incr = llvmIR.Constant(i8, imm)
+					builder.store(builder.add(ori, incr), dptr)
+				elif op == 3:
+					dptr = builder.load(dptr_ptr)
+					sptr = builder.load(sptr_ptr)
+					cur = builder.ptrtoint(dptr, i64)
+					cur_end = builder.add(cur, llvmIR.Constant(i64, imm))
+					start = builder.ptrtoint(sptr, i64)
+					bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+					builder.call(ptrBoundCheck, [start, bound, cur])
+					builder.call(ptrBoundCheck, [start, bound, cur_end])
+					builder.call(print_chars, [dptr, llvmIR.Constant(i64, imm)])
+				elif op == 4:
+					dptr = builder.load(dptr_ptr)
+					sptr = builder.load(sptr_ptr)
+					cur = builder.ptrtoint(dptr, i64)
+					cur_end = builder.add(cur, llvmIR.Constant(i64, imm))
+					start = builder.ptrtoint(sptr, i64)
+					bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+					builder.call(ptrBoundCheck, [start, bound, cur])
+					builder.call(ptrBoundCheck, [start, bound, cur_end])
+					builder.call(read_chars, [dptr, llvmIR.Constant(i64, imm)])
 				else:
-					raise Exception("invalid opcode %02x"%ord(x))
+					raise Exception("unreachable error")
 
 			return (block, None)
 
@@ -168,13 +226,16 @@ def compile(program, verbose=False):
 	main_routine = llvmIR.Function(module, fty, "main_routine")
 	
 	# add external functions
-	fty = llvmIR.FunctionType(i32, [i8])
-	putchar = llvmIR.Function(module, fty, "putchar")
-	fty = llvmIR.FunctionType(i8, [])
-	getchar = llvmIR.Function(module, fty, "getchar")
+	fty = llvmIR.FunctionType(i32, [i8_ptr, i64])
+	putchar = llvmIR.Function(module, fty, "print_chars")
+	fty = llvmIR.FunctionType(i8, [i8_ptr, i64])
+	getchar = llvmIR.Function(module, fty, "read_chars")
+	fty = llvmIR.FunctionType(i32, [i64, i64, i64])
+	ptrBoundCheck = llvmIR.Function(module, fty, "ptrBoundCheck")
 
 	# initialize data_ptr
 	data_ptr = llvmIR.GlobalVariable(module, i8_ptr, "data_ptr")
+	start_ptr = llvmIR.GlobalVariable(module, i8_ptr, "start_ptr")
 
 	# initialize intro block
 	intro = main_routine.append_basic_block()
@@ -182,7 +243,8 @@ def compile(program, verbose=False):
 	builder.position_at_end(intro)
 	heap = libc.calloc(1, 0x3000)
 	builder.store(llvmIR.Constant(i64, heap).inttoptr(i8_ptr), data_ptr)
-	
+	builder.store(llvmIR.Constant(i64, heap).inttoptr(i8_ptr), start_ptr)
+
 	# compile bf code
 	body = program.codegen(module)
 
@@ -213,6 +275,7 @@ def execute(llmod, verbose=False):
 
 	with llvm.create_mcjit_compiler(llmod, target_machine) as ee:
 		ee.add_global_mapping(llmod.get_global_variable("data_ptr")._ptr, libc.malloc(8))
+		ee.add_global_mapping(llmod.get_global_variable("start_ptr")._ptr, libc.malloc(8))
 		ee.finalize_object()
 		cfptr = ee.get_function_address("main_routine")
 		if verbose:
@@ -228,7 +291,7 @@ if __name__ == "__main__":
 	llvm.initialize()
 	llvm.initialize_native_target()
 	llvm.initialize_native_asmprinter()
-	llvm.load_library_permanently("/lib/x86_64-linux-gnu/libc.so.6")
+	llvm.load_library_permanently("./runtime.so")
 
 	# initialize libc
 	libc = CDLL("/lib/x86_64-linux-gnu/libc.so.6")
