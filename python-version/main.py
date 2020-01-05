@@ -236,8 +236,8 @@ if __name__ == "__main__":
 	putchar = cast(addressof(libc.putchar), c_long_p).contents.value
 
 	# print hello world
-	example_prog = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
-	execute(compile(bfProgram(example_prog)))
+	printbanner = "++++[++++>---<]>-.++++.[-->+<]>---.---[----->++<]>.-------------.+++++++++++.----.[++>---<]>--.--[->++++<]>--.[++>---<]>.---.++.>++++++++++."
+	execute(compile(bfProgram(printbanner)))
 
 	while True:
 		code = input(">>> ")
