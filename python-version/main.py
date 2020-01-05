@@ -108,6 +108,13 @@ class bfProgram:
 					ori = builder.load(dptr)
 					builder.call(putchar, [ori])
 
+				elif x == ',':
+					getchar = findFunctionByName(module, "getchar")
+					dptr_ptr = findGlobvarByName(module, "data_ptr")
+					dptr = builder.load(dptr_ptr)
+					ch = builder.call(getchar, [])
+					ori = builder.store(ch, dptr)
+
 				else:
 					raise Exception("invalid opcode %02x"%ord(x))
 
@@ -163,6 +170,8 @@ def compile(program, verbose=False):
 	# add external functions
 	fty = llvmIR.FunctionType(i32, [i8])
 	putchar = llvmIR.Function(module, fty, "putchar")
+	fty = llvmIR.FunctionType(i8, [])
+	getchar = llvmIR.Function(module, fty, "getchar")
 
 	# initialize data_ptr
 	data_ptr = llvmIR.GlobalVariable(module, i8_ptr, "data_ptr")
