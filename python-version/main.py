@@ -27,14 +27,26 @@ def findGlobvarByName(module, gname):
 	return None
 
 def resolveRight(x):
-	if (type(x) == type((1,2))):
-		return resolveRight(x[1])
-	return x
+
+	if type(x) == type((1,2)):
+		if x[1] == None:
+			return resolveRight(x[0])
+		else:
+			return resolveRight(x[1])
+	else:
+		assert(x != None and type(x) != type((1,2)))
+		return x
 
 def resolveLeft(x):
-	if (type(x) == type((1,2))):
-		return resolveLeft(x[0])
-	return x
+
+	if type(x) == tuple:
+		if x[0] == type((1,2)):
+			return resolveLeft(x[1])
+		else:
+			return resolveLeft(x[0])
+	else:
+		assert(x != None and type(x) != type((1,2)))
+		return x
 
 class bfProgram:
 	def __init__ (self, c):
@@ -44,17 +56,16 @@ class bfProgram:
 		self.br2 = None
 		self.isLinear = True
 
-		if not self.validate_code():
-			raise Exception("invalid bf code")
+		pars = self.match_par()
 
 		branchpos = self.code.find("[")
 
 		if branchpos != -1:
-			matchpos = self.code.find("]")
-			assert(matchpos != -1)
+			assert(branchpos in pars.keys())
+			matchpos = pars[branchpos]
 			self.head = bfProgram(self.code[:branchpos])
-			self.br1 = bfProgram(self.code[branchpos + 1:matchpos])
-			self.br2 = bfProgram(self.code[matchpos + 1:])
+			self.br1 = bfProgram(self.code[branchpos+1:matchpos])
+			self.br2 = bfProgram(self.code[matchpos+1:])
 			self.isLinear = False
 
 	def codegen(self, module):
@@ -104,45 +115,43 @@ class bfProgram:
 
 		else:
 			# create all blocks
-			headb = resolveLeft(self.head.codegen(module))
-			br1b = resolveLeft(self.br1.codegen(module))
-			br2b = resolveLeft(self.br2.codegen(module))
+			headb = self.head.codegen(module)
+			br1b = self.br1.codegen(module)
+			br2b = self.br2.codegen(module)
 
 			# emit code for head
 			builder = llvmIR.IRBuilder()
-			builder.position_at_end(headb)
+			builder.position_at_end(resolveRight(headb))
 			currentval = builder.load(builder.load(findGlobvarByName(module, "data_ptr")))
 			zero = llvmIR.Constant(i8, 0)
 			cond = builder.icmp_unsigned("==", currentval, zero)
-			builder.cbranch(cond, br1b, br2b)
+			builder.cbranch(cond, resolveLeft(br2b), resolveLeft(br1b))
 
 			# emit code for taken
-			builder.position_at_end(br1b)
+			builder.position_at_end(resolveRight(br1b))
 			currentval = builder.load(builder.load(findGlobvarByName(module, "data_ptr")))
 			zero = llvmIR.Constant(i8, 0)
 			cond = builder.icmp_unsigned("!=", currentval, zero)
-			builder.cbranch(cond, br1b, br2b)
+			builder.cbranch(cond, resolveLeft(br1b), resolveLeft(br2b))
 
 			return (headb, br2b)
 
-	def validate_code (self):
+	def match_par (self):
 		# validate matching of [ and ]
 		charset = "><+-.,"
-		try:
-			stk = []
-			for x in self.code:
-				if x == '[':
-					stk.append(x)
-				elif x == ']':
-					if stk.pop() != '[':
-						return False
-				elif not (x in charset):
-					return False
-			return True
+		stk = []
+		rv = dict()
 
-		except Exception as e:
-			print(e)
-			return False
+		for i, x in enumerate(self.code):
+			if x == '[':
+				stk.append((x, i))
+			elif x == ']':
+				if (len(stk) == 0):
+					raise Exception("unmatching parantheses in program")
+				ch, idx = stk.pop()
+				rv[idx] = i
+		
+		return rv
 
 def compile(program, verbose=False):
 
@@ -166,7 +175,7 @@ def compile(program, verbose=False):
 	builder.store(llvmIR.Constant(i64, heap).inttoptr(i8_ptr), data_ptr)
 	
 	# compile bf code
-	m1, m2 = program.codegen(module)
+	body = program.codegen(module)
 
 	# append epilogue
 	epilogue = main_routine.append_basic_block()
@@ -175,13 +184,10 @@ def compile(program, verbose=False):
 
 	# connect control flow
 	builder.position_at_end(intro)
-	builder.branch(m1)
-	if m2 == None:
-		builder.position_at_end(m1)
-		builder.branch(epilogue)
-	else:
-		builder.position_at_end(resolveRight(m2))
-		builder.branch(epilogue)
+	builder.branch(resolveLeft(body))
+
+	builder.position_at_end(resolveRight(body))
+	builder.branch(epilogue)
 
 	# verify generated IR
 	strmod = str(module)
@@ -219,6 +225,10 @@ if __name__ == "__main__":
 	libc = CDLL("/lib/x86_64-linux-gnu/libc.so.6")
 	c_long_p = POINTER(c_long)
 	putchar = cast(addressof(libc.putchar), c_long_p).contents.value
+
+	# print hello world
+	example_prog = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+	execute(compile(bfProgram(example_prog)))
 
 	while True:
 		code = input(">>> ")
