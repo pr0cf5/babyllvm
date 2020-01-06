@@ -121,7 +121,7 @@ class bfProgram:
 
 			self.shortened_code.append((state, imm))
 
-	def codegen(self, module):
+	def codegen(self, module, whitelist=[]):
 		main_routine = findFunctionByName(module, "main_routine")
 
 		if (self.isLinear == True):
@@ -132,47 +132,60 @@ class bfProgram:
 			dptr_ptr = findGlobvarByName(module, "data_ptr")
 			sptr_ptr = findGlobvarByName(module, "start_ptr")
 			ptrBoundCheck = findFunctionByName(module, "ptrBoundCheck")
-			print_chars = findFunctionByName(module, "print_chars")
-			read_chars = findFunctionByName(module, "read_chars")
+			print_char = findFunctionByName(module, "print_char")
+			read_char = findFunctionByName(module, "read_char")
+			rel_pos = 0
+			safe_pos = whitelist[::]
 
 			for op, imm in self.shortened_code:
 				if op == 0:
 					continue
 				elif op == 1:
-					ori = builder.ptrtoint(builder.load(dptr_ptr), i64)
-					incr = llvmIR.Constant(i64, imm)
-					new = builder.inttoptr(builder.add(ori, incr), i8_ptr)
-					builder.store(new, dptr_ptr)
+					if imm != 0:
+						ori = builder.ptrtoint(builder.load(dptr_ptr), i64)
+						incr = llvmIR.Constant(i64, imm)
+						new = builder.inttoptr(builder.add(ori, incr), i8_ptr)
+						builder.store(new, dptr_ptr)
+						rel_pos += imm
 				elif op == 2:
-					dptr = builder.load(dptr_ptr)
-					sptr = builder.load(sptr_ptr)
-					cur = builder.ptrtoint(dptr, i64)
-					start = builder.ptrtoint(sptr, i64)
-					bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
-					builder.call(ptrBoundCheck, [start, bound, cur])
-					ori = builder.load(dptr)
-					incr = llvmIR.Constant(i8, imm)
-					builder.store(builder.add(ori, incr), dptr)
+					if imm != 0:
+						dptr = builder.load(dptr_ptr)
+						if not rel_pos in safe_pos:
+							sptr = builder.load(sptr_ptr)
+							cur = builder.ptrtoint(dptr, i64)
+							start = builder.ptrtoint(sptr, i64)
+							bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+							builder.call(ptrBoundCheck, [start, bound, cur])
+							safe_pos.append(rel_pos)
+						ori = builder.load(dptr)
+						incr = llvmIR.Constant(i8, imm)
+						builder.store(builder.add(ori, incr), dptr)
 				elif op == 3:
 					dptr = builder.load(dptr_ptr)
-					sptr = builder.load(sptr_ptr)
-					cur = builder.ptrtoint(dptr, i64)
-					cur_end = builder.add(cur, llvmIR.Constant(i64, imm))
-					start = builder.ptrtoint(sptr, i64)
-					bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
-					builder.call(ptrBoundCheck, [start, bound, cur])
-					builder.call(ptrBoundCheck, [start, bound, cur_end])
-					builder.call(print_chars, [dptr, llvmIR.Constant(i64, imm)])
+					if not rel_pos in safe_pos:
+						sptr = builder.load(sptr_ptr)
+						cur = builder.ptrtoint(dptr, i64)
+						start = builder.ptrtoint(sptr, i64)
+						bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+						builder.call(ptrBoundCheck, [start, bound, cur])
+						safe_pos.append(rel_pos)
+					assert(imm > 0)
+					for i in range(imm):
+						builder.call(print_char, [builder.load(dptr)])
 				elif op == 4:
 					dptr = builder.load(dptr_ptr)
-					sptr = builder.load(sptr_ptr)
-					cur = builder.ptrtoint(dptr, i64)
-					cur_end = builder.add(cur, llvmIR.Constant(i64, imm))
-					start = builder.ptrtoint(sptr, i64)
-					bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
-					builder.call(ptrBoundCheck, [start, bound, cur])
-					builder.call(ptrBoundCheck, [start, bound, cur_end])
-					builder.call(read_chars, [dptr, llvmIR.Constant(i64, imm)])
+					if not rel_pos in safe_pos:
+						sptr = builder.load(sptr_ptr)
+						cur = builder.ptrtoint(dptr, i64)
+						start = builder.ptrtoint(sptr, i64)
+						bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+						builder.call(ptrBoundCheck, [start, bound, cur])
+						safe_pos.append(rel_pos)
+					assert(imm > 0)
+					for i in range(imm - 1):
+						builder.call(read_char, [])
+					val = builder.call(read_char, [])
+					builder.store(val, dptr)
 				else:
 					raise Exception("unreachable error")
 
@@ -181,20 +194,38 @@ class bfProgram:
 		else:
 			# create all blocks
 			headb = self.head.codegen(module)
-			br1b = self.br1.codegen(module)
-			br2b = self.br2.codegen(module)
+			br1b = self.br1.codegen(module, [0])
+			br2b = self.br2.codegen(module, [0])
 
+			dptr_ptr = findGlobvarByName(module, "data_ptr")
+			sptr_ptr = findGlobvarByName(module, "start_ptr")
+			ptrBoundCheck = findFunctionByName(module, "ptrBoundCheck")
+			
 			# emit code for head
 			builder = llvmIR.IRBuilder()
 			builder.position_at_end(resolveRight(headb))
-			currentval = builder.load(builder.load(findGlobvarByName(module, "data_ptr")))
+			if not 0 in whitelist:
+				dptr = builder.load(dptr_ptr)
+				sptr = builder.load(sptr_ptr)
+				cur = builder.ptrtoint(dptr, i64)
+				start = builder.ptrtoint(sptr, i64)
+				bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+				builder.call(ptrBoundCheck, [start, bound, cur])
+			currentval = builder.load(builder.load(dptr_ptr))
 			zero = llvmIR.Constant(i8, 0)
 			cond = builder.icmp_unsigned("==", currentval, zero)
 			builder.cbranch(cond, resolveLeft(br2b), resolveLeft(br1b))
 
 			# emit code for taken
 			builder.position_at_end(resolveRight(br1b))
-			currentval = builder.load(builder.load(findGlobvarByName(module, "data_ptr")))
+			if not 0 in whitelist:
+				dptr = builder.load(dptr_ptr)
+				sptr = builder.load(sptr_ptr)
+				cur = builder.ptrtoint(dptr, i64)
+				start = builder.ptrtoint(sptr, i64)
+				bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
+				builder.call(ptrBoundCheck, [start, bound, cur])
+			currentval = builder.load(builder.load(dptr_ptr))
 			zero = llvmIR.Constant(i8, 0)
 			cond = builder.icmp_unsigned("!=", currentval, zero)
 			builder.cbranch(cond, resolveLeft(br1b), resolveLeft(br2b))
@@ -226,10 +257,10 @@ def compile(program, verbose=False):
 	main_routine = llvmIR.Function(module, fty, "main_routine")
 	
 	# add external functions
-	fty = llvmIR.FunctionType(i32, [i8_ptr, i64])
-	putchar = llvmIR.Function(module, fty, "print_chars")
-	fty = llvmIR.FunctionType(i8, [i8_ptr, i64])
-	getchar = llvmIR.Function(module, fty, "read_chars")
+	fty = llvmIR.FunctionType(i32, [i8])
+	print_char = llvmIR.Function(module, fty, "print_char")
+	fty = llvmIR.FunctionType(i8, [])
+	read_char = llvmIR.Function(module, fty, "read_char")
 	fty = llvmIR.FunctionType(i32, [i64, i64, i64])
 	ptrBoundCheck = llvmIR.Function(module, fty, "ptrBoundCheck")
 
@@ -295,9 +326,7 @@ if __name__ == "__main__":
 
 	# initialize libc
 	libc = CDLL("/lib/x86_64-linux-gnu/libc.so.6")
-	c_long_p = POINTER(c_long)
-	putchar = cast(addressof(libc.putchar), c_long_p).contents.value
-
+	
 	# print hello world
 	printbanner = "-[--->+<]>-.[---->+++++<]>-.---.--[--->+<]>-.++[--->++<]>.-----------.+++++++++++++.-------.--[--->+<]>--.[->+++<]>++.++++++.--.---[->+++<]>+.-[->+++<]>+.+[---->+<]>+++.+[----->+<]>+.-------------.++++++++++++.--------.--[--->+<]>-.-[--->++<]>-.++++++++++.+[---->+<]>+++.[->+++<]>+.-[->+++<]>.---[----->++<]>.-------------.+.-.+++++++++++++.-------------.+++++++++.-----------.++.--[--->+<]>-.---[->++++<]>.-----.[--->+<]>-----.---[->++++<]>.------------.---.--[--->+<]>-.---[->++++<]>-.-------.-----------.+++++++++++++.-------.-[--->+<]>--.---[->++++<]>.+++[->+++<]>.+++++++++++++.-----.[->+++++<]>-.[->+++<]>++.[--->+<]>----.+++[->+++<]>++.++++++++.+++++.--------.---[->+++<]>+.-[--->+<]>.++++++++.+++[----->++<]>.------------.--[->++++<]>-.+[->+++<]>.+.------.+++++.--[--->+<]>--.---[----->++<]>.-------------.+.-.+++++++++++++.+.+[---->+<]>+++.---[->++++<]>.-----.[--->+<]>-----.---[->++++<]>.------------.+.+++++.-------.++++++++++++.+[---->+<]>+++.---[->++++<]>-.----.[--->+<]>-----.+[->+++<]>.++++++++++++.--.+++.----.---.------.--.--[--->+<]>-.+++[->+++<]>.-.-[--->+<]>-.+++++[->+++<]>.+++.[-->+++++<]>+++.---[->++++<]>+.-------.+++++++.--.++.[->+++<]>++.+++++++++++.[++>---<]>--.---[->++++<]>.------------.-------.--[--->+<]>-.[---->+<]>+++.---[->++++<]>.------------.---.[--->+<]>++.-[---->+<]>++.+[->+++<]>++.[--->+<]>+.--[->+++<]>+.++..-.-[--->+<]>-.---[->++++<]>.------------.---.--[--->+<]>-.++[--->++<]>.---.++++.----.+++++++++++.-.+[---->+<]>+++.+++++[->+++<]>.---------.[--->+<]>--.+++++[->+++<]>.-.---------.---[->+++<]>+.-[->+++<]>+.+[---->+<]>+++.---[->++++<]>+.-------.----------.+.+++++++++++++.+.+.+[->+++<]>++.+++++++++++++.----------.+++++.+++++.-------.--[->+++<]>-.++[--->++<]>.--[->+++<]>+.-[->++++<]>.++++++++++++..----.+++.+[-->+<]>.-----------..[--->+<]>.+++++++++.[----->++<]>++.[--->++<]>+++.+[->+++<]>+.++.--.+++++++.-----------.-.+++++.--------.-[-->+<]>--.---[----->+<]>.+++.-----------.--[->+++<]>.++[--->++<]>+.+[->+++<]>+.++.--.----[->+++<]>.---[-->+++<]>.---[----->+<]>-.+++[->+++<]>++.++++++++.+++++.--------.-[--->+<]>--.+[->+++<]>+.++++++++.[--->+++++<]>.>++++++++++.."
 	execute(compile(bfProgram(printbanner)))
