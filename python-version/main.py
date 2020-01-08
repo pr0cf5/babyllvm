@@ -1,10 +1,11 @@
 #!/usr/bin/python3
 
 from ctypes import CFUNCTYPE, c_long, c_int, POINTER, cast, CDLL, addressof
-import sys
+import sys, os
 import llvmlite.ir as llvmIR
 import llvmlite.binding as llvm
 import traceback
+import signal
 
 i8 = llvmIR.IntType(8)
 i32 = llvmIR.IntType(32)
@@ -342,7 +343,18 @@ def banner():
 	l, h = compile(bfProgram(code))
 	execute(l, h)
 
+def timeout():
+	print("timed out!")
+	exit(0)
+
 if __name__ == "__main__":
+
+	# cd to where all the good stuff is located
+	os.chdir(sys.path[0])
+
+	# alarm
+	signal.signal(signal.SIGALRM, timeout)
+	signal.alarm(300)
 
 	# initialize llvm backend
 	llvm.initialize()
