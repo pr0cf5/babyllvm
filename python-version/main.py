@@ -48,6 +48,25 @@ def resolveLeft(x):
 		assert(x != None and type(x) != type((1,2)))
 		return x
 
+def is_safe(v, wl):
+	if wl == None:
+		return False
+	a1, a2 = wl
+	return v >= a1 and v <= a2
+
+def whitelist_add(wl, v):
+	assert(not is_safe(v, wl))
+	if wl == None:
+		return (v, v)
+	a1, a2 = wl
+	if v < a1:
+		return (v, a2)
+	elif v > a2:
+		return (a1, v)
+	else:
+		raise Exception("unreachable error")
+
+
 class bfProgram:
 	def __init__ (self, c):
 		self.code = c
@@ -121,7 +140,7 @@ class bfProgram:
 
 			self.shortened_code.append((state, imm))
 
-	def codegen(self, module, whitelist=[]):
+	def codegen(self, module, whitelist=None):
 		main_routine = findFunctionByName(module, "main_routine")
 
 		if (self.isLinear == True):
@@ -135,7 +154,10 @@ class bfProgram:
 			print_char = findFunctionByName(module, "print_char")
 			read_char = findFunctionByName(module, "read_char")
 			rel_pos = 0
-			safe_pos = whitelist[::]
+			if whitelist == None:
+				whitelist_cpy = None
+			else:
+				whitelist_cpy = whitelist[::]
 
 			for op, imm in self.shortened_code:
 				if op == 0:
@@ -150,37 +172,37 @@ class bfProgram:
 				elif op == 2:
 					if imm != 0:
 						dptr = builder.load(dptr_ptr)
-						if not rel_pos in safe_pos:
+						if not is_safe(rel_pos, whitelist_cpy):
 							sptr = builder.load(sptr_ptr)
 							cur = builder.ptrtoint(dptr, i64)
 							start = builder.ptrtoint(sptr, i64)
 							bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
 							builder.call(ptrBoundCheck, [start, bound, cur])
-							safe_pos.append(rel_pos)
+							whitelist_cpy = whitelist_add(whitelist_cpy, rel_pos)
 						ori = builder.load(dptr)
 						incr = llvmIR.Constant(i8, imm)
 						builder.store(builder.add(ori, incr), dptr)
 				elif op == 3:
 					dptr = builder.load(dptr_ptr)
-					if not rel_pos in safe_pos:
+					if not is_safe(rel_pos, whitelist_cpy):
 						sptr = builder.load(sptr_ptr)
 						cur = builder.ptrtoint(dptr, i64)
 						start = builder.ptrtoint(sptr, i64)
 						bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
 						builder.call(ptrBoundCheck, [start, bound, cur])
-						safe_pos.append(rel_pos)
+						whitelist_cpy = whitelist_add(whitelist_cpy, rel_pos)
 					assert(imm > 0)
 					for i in range(imm):
 						builder.call(print_char, [builder.load(dptr)])
 				elif op == 4:
 					dptr = builder.load(dptr_ptr)
-					if not rel_pos in safe_pos:
+					if not is_safe(rel_pos, whitelist_cpy):
 						sptr = builder.load(sptr_ptr)
 						cur = builder.ptrtoint(dptr, i64)
 						start = builder.ptrtoint(sptr, i64)
 						bound = builder.add(start, llvmIR.Constant(i64, 0x3000))
 						builder.call(ptrBoundCheck, [start, bound, cur])
-						safe_pos.append(rel_pos)
+						whitelist_cpy = whitelist_add(whitelist_cpy, rel_pos)
 					assert(imm > 0)
 					for i in range(imm - 1):
 						builder.call(read_char, [])
@@ -194,8 +216,8 @@ class bfProgram:
 		else:
 			# create all blocks
 			headb = self.head.codegen(module)
-			br1b = self.br1.codegen(module, [0])
-			br2b = self.br2.codegen(module, [0])
+			br1b = self.br1.codegen(module, (0, 0))
+			br2b = self.br2.codegen(module, (0, 0))
 
 			dptr_ptr = findGlobvarByName(module, "data_ptr")
 			sptr_ptr = findGlobvarByName(module, "start_ptr")
@@ -204,7 +226,7 @@ class bfProgram:
 			# emit code for head
 			builder = llvmIR.IRBuilder()
 			builder.position_at_end(resolveRight(headb))
-			if not 0 in whitelist:
+			if not is_safe(0, whitelist):
 				dptr = builder.load(dptr_ptr)
 				sptr = builder.load(sptr_ptr)
 				cur = builder.ptrtoint(dptr, i64)
@@ -218,7 +240,7 @@ class bfProgram:
 
 			# emit code for taken
 			builder.position_at_end(resolveRight(br1b))
-			if not 0 in whitelist:
+			if not is_safe(0, whitelist):
 				dptr = builder.load(dptr_ptr)
 				sptr = builder.load(sptr_ptr)
 				cur = builder.ptrtoint(dptr, i64)
@@ -272,9 +294,9 @@ def compile(program, verbose=False):
 	intro = main_routine.append_basic_block()
 	builder = llvmIR.IRBuilder()
 	builder.position_at_end(intro)
-	heap = libc.calloc(1, 0x3000)
-	builder.store(llvmIR.Constant(i64, heap).inttoptr(i8_ptr), data_ptr)
-	builder.store(llvmIR.Constant(i64, heap).inttoptr(i8_ptr), start_ptr)
+	heap = libc.calloc(1, 0x3010)
+	builder.store(llvmIR.Constant(i64, heap + 0x10).inttoptr(i8_ptr), data_ptr)
+	builder.store(llvmIR.Constant(i64, heap + 0x10).inttoptr(i8_ptr), start_ptr)
 
 	# compile bf code
 	body = program.codegen(module)
@@ -299,14 +321,14 @@ def compile(program, verbose=False):
 	if verbose:
 		print(llmod)
 
-	return llmod
+	return llmod, heap
 
-def execute(llmod, verbose=False):
+def execute(llmod, heap, verbose=False):
 	target_machine = llvm.Target.from_default_triple().create_target_machine()
 
 	with llvm.create_mcjit_compiler(llmod, target_machine) as ee:
-		ee.add_global_mapping(llmod.get_global_variable("data_ptr")._ptr, libc.malloc(8))
-		ee.add_global_mapping(llmod.get_global_variable("start_ptr")._ptr, libc.malloc(8))
+		ee.add_global_mapping(llmod.get_global_variable("data_ptr")._ptr, heap)
+		ee.add_global_mapping(llmod.get_global_variable("start_ptr")._ptr, heap + 0x8)
 		ee.finalize_object()
 		cfptr = ee.get_function_address("main_routine")
 		if verbose:
@@ -315,6 +337,10 @@ def execute(llmod, verbose=False):
 		if cfunc(1) != 1:
 			raise Exception("jitted-code returned an abnormal value")
 
+def mem_free(ptr):
+	INTP = POINTER(c_int)
+	ptr = cast(ptr, INTP)
+	libc.free(ptr)
 
 if __name__ == "__main__":
 
@@ -329,10 +355,13 @@ if __name__ == "__main__":
 	
 	# print hello world
 	printbanner = "-[--->+<]>-.[---->+++++<]>-.---.--[--->+<]>-.++[--->++<]>.-----------.+++++++++++++.-------.--[--->+<]>--.[->+++<]>++.++++++.--.---[->+++<]>+.-[->+++<]>+.+[---->+<]>+++.+[----->+<]>+.-------------.++++++++++++.--------.--[--->+<]>-.-[--->++<]>-.++++++++++.+[---->+<]>+++.[->+++<]>+.-[->+++<]>.---[----->++<]>.-------------.+.-.+++++++++++++.-------------.+++++++++.-----------.++.--[--->+<]>-.---[->++++<]>.-----.[--->+<]>-----.---[->++++<]>.------------.---.--[--->+<]>-.---[->++++<]>-.-------.-----------.+++++++++++++.-------.-[--->+<]>--.---[->++++<]>.+++[->+++<]>.+++++++++++++.-----.[->+++++<]>-.[->+++<]>++.[--->+<]>----.+++[->+++<]>++.++++++++.+++++.--------.---[->+++<]>+.-[--->+<]>.++++++++.+++[----->++<]>.------------.--[->++++<]>-.+[->+++<]>.+.------.+++++.--[--->+<]>--.---[----->++<]>.-------------.+.-.+++++++++++++.+.+[---->+<]>+++.---[->++++<]>.-----.[--->+<]>-----.---[->++++<]>.------------.+.+++++.-------.++++++++++++.+[---->+<]>+++.---[->++++<]>-.----.[--->+<]>-----.+[->+++<]>.++++++++++++.--.+++.----.---.------.--.--[--->+<]>-.+++[->+++<]>.-.-[--->+<]>-.+++++[->+++<]>.+++.[-->+++++<]>+++.---[->++++<]>+.-------.+++++++.--.++.[->+++<]>++.+++++++++++.[++>---<]>--.---[->++++<]>.------------.-------.--[--->+<]>-.[---->+<]>+++.---[->++++<]>.------------.---.[--->+<]>++.-[---->+<]>++.+[->+++<]>++.[--->+<]>+.--[->+++<]>+.++..-.-[--->+<]>-.---[->++++<]>.------------.---.--[--->+<]>-.++[--->++<]>.---.++++.----.+++++++++++.-.+[---->+<]>+++.+++++[->+++<]>.---------.[--->+<]>--.+++++[->+++<]>.-.---------.---[->+++<]>+.-[->+++<]>+.+[---->+<]>+++.---[->++++<]>+.-------.----------.+.+++++++++++++.+.+.+[->+++<]>++.+++++++++++++.----------.+++++.+++++.-------.--[->+++<]>-.++[--->++<]>.--[->+++<]>+.-[->++++<]>.++++++++++++..----.+++.+[-->+<]>.-----------..[--->+<]>.+++++++++.[----->++<]>++.[--->++<]>+++.+[->+++<]>+.++.--.+++++++.-----------.-.+++++.--------.-[-->+<]>--.---[----->+<]>.+++.-----------.--[->+++<]>.++[--->++<]>+.+[->+++<]>+.++.--.----[->+++<]>.---[-->+++<]>.---[----->+<]>-.+++[->+++<]>++.++++++++.+++++.--------.-[--->+<]>--.+[->+++<]>+.++++++++.[--->+++++<]>.>++++++++++.."
-	execute(compile(bfProgram(printbanner)))
+	l, h = compile(bfProgram(printbanner))
+	execute(l, h)
+	mem_free(h)
 
 	while True:
 		code = input(">>> ")
 		pg = bfProgram(code)
-		llmod = compile(pg)
-		execute(llmod)
+		llmod, heap = compile(pg, True)
+		execute(llmod, heap)
+		mem_free(heap)
