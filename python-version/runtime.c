@@ -1,12 +1,26 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+
+struct DATA_s {
+	char *data_ptr;
+	char *start_ptr;
+	char buf[0x3000];
+};
+
+struct DATA_s DATA;
 
 int ptrBoundCheck(unsigned long start, unsigned long end, unsigned long val) {
 	if (val < start || val > end) {
-		fprintf(stderr, "oob!!\n");
+		fprintf(stderr, "assert (0x%lx < 0x%lx < 0x%lx)!!\n", start, val, end);
 		exit(-1);
 	}
+}
+
+void *alloc_data() {
+	memset(DATA.buf, 0x0, 0x3000);
+	return &DATA;
 }
 
 int read_chars(char *ptr, size_t length) {
